@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agentic AI — Animated Video Generator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <header class="masthead">
+    <div class="masthead-inner">
+      <p class="eyebrow">Agentic AI · Semester Project · Spring 2026</p>
+      <h1>From Prompt to Polished Short Film</h1>
+      <p class="subtitle">
+        End-to-end multi-agent pipeline — story, voice, image, video, and an editor agent that
+        understands plain-English commands.
+      </p>
+      <p class="credits">
+        Built by Hussain Ali Zaidi (22i-0902) · Hamza Ahmed (22i-1339) · Muhammad Daniyal Aziz (22i-0753)
+      </p>
+    </div>
+  </header>
+
+  <main class="layout">
+
+    <!-- LEFT COLUMN -->
+    <section class="col-left">
+
+      <article class="card create">
+        <header class="card-head">
+          <h2>1 · Create a project</h2>
+          <span class="phase-badge" id="health-badge" data-state="loading">checking…</span>
+        </header>
+
+        <label class="field">
+          <span class="lbl">Story prompt</span>
+          <textarea id="prompt" rows="4"
+            placeholder="A young astronaut discovers a hidden ocean on Mars…"></textarea>
+        </label>
+
+        <div class="row two">
+          <label class="field">
+            <span class="lbl">Scenes</span>
+            <input type="number" id="num-scenes" min="2" max="8" value="3" />
+          </label>
+          <label class="field">
+            <span class="lbl">Style</span>
+            <select id="style">
+              <option value="cinematic">Cinematic</option>
+              <option value="cartoon">Cartoon</option>
+              <option value="anime">Anime</option>
+              <option value="noir">Noir</option>
+              <option value="watercolor">Watercolor</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="run-btn" class="btn primary">Run pipeline</button>
+          <span id="run-status" class="status"></span>
+        </div>
+      </article>
+
+      <article class="card progress" id="progress-card" hidden>
+        <header class="card-head">
+          <h2>2 · Pipeline progress</h2>
+          <span class="phase-badge" id="phase-badge">idle</span>
+        </header>
+        <ol class="phase-strip">
+          <li data-phase="phase1"><span class="dot"></span> Phase 1 · Story</li>
+          <li data-phase="phase2"><span class="dot"></span> Phase 2 · Audio</li>
+          <li data-phase="phase3"><span class="dot"></span> Phase 3 · Video</li>
+          <li data-phase="complete"><span class="dot"></span> Complete</li>
+        </ol>
+        <pre id="log" class="log" aria-live="polite"></pre>
+      </article>
+
+      <article class="card edit" id="edit-card" hidden>
+        <header class="card-head">
+          <h2>5 · Edit agent</h2>
+          <span class="phase-badge" id="edit-badge">ready</span>
+        </header>
+        <p class="hint">Describe the change in plain English. The agent classifies intent, executes the change, and snapshots a new version.</p>
+        <div class="quick-edits">
+          <button class="chip" data-q="Make scene 1 darker">scene 1 darker</button>
+          <button class="chip" data-q="Apply a sepia filter to all scenes">sepia all</button>
+          <button class="chip" data-q="Change the narrator's voice tone to whispered">whisper narrator</button>
+          <button class="chip" data-q="Speed up the video by 1.5x">1.5× speed</button>
+          <button class="chip" data-q="Remove the subtitles">remove subs</button>
+          <button class="chip" data-q="Apply a noir filter to scene 2">noir scene 2</button>
+        </div>
+        <label class="field">
+          <span class="lbl">Edit query</span>
+          <input id="edit-query" type="text" placeholder="e.g. Make scene 2 darker" />
+        </label>
+        <div class="actions">
+          <button id="edit-btn" class="btn primary">Submit edit</button>
+          <span id="edit-status" class="status"></span>
+        </div>
+        <div class="intent-preview" id="intent-preview" hidden></div>
+      </article>
+    </section>
+
+    <!-- RIGHT COLUMN -->
+    <section class="col-right">
+
+      <article class="card preview" id="preview-card" hidden>
+        <header class="card-head">
+          <h2>3 · Preview</h2>
+          <span class="phase-badge" id="preview-version">v—</span>
+        </header>
+        <video id="video" controls preload="metadata"></video>
+        <p class="hint" id="preview-note"></p>
+        <div class="meta-tabs">
+          <button class="tab is-active" data-tab="story">Story</button>
+          <button class="tab" data-tab="characters">Characters</button>
+          <button class="tab" data-tab="scenes">Scenes</button>
+          <button class="tab" data-tab="audio">Audio manifest</button>
+        </div>
+        <div class="meta-bodies">
+          <pre class="meta-body is-active" id="body-story"></pre>
+          <pre class="meta-body" id="body-characters"></pre>
+          <pre class="meta-body" id="body-scenes"></pre>
+          <pre class="meta-body" id="body-audio"></pre>
+        </div>
+      </article>
+
+      <article class="card history" id="history-card" hidden>
+        <header class="card-head">
+          <h2>4 · Version history</h2>
+        </header>
+        <p class="hint">Every generation and every edit is snapshotted. Click revert to roll back at any granularity.</p>
+        <ul id="history-list" class="history-list"></ul>
+      </article>
+
+      <article class="card projects">
+        <header class="card-head">
+          <h2>Past projects</h2>
+          <button class="btn ghost small" id="refresh-projects">refresh</button>
+        </header>
+        <ul id="projects-list" class="projects-list"></ul>
+      </article>
+    </section>
+  </main>
+
+  <footer class="footer">
+    Multi-agent LangGraph pipeline · FastAPI · WebSocket progress · Pydantic-validated state · MoviePy / Pillow / edge-tts.
+  </footer>
+
+  <script src="/assets/app.js"></script>
+</body>
+</html>

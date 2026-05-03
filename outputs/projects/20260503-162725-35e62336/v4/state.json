@@ -1,0 +1,169 @@
+{
+  "project_id": "20260503-162725-35e62336",
+  "version": 1,
+  "user_prompt": "A young astronaut discovers a hidden ocean on Mars",
+  "style_hint": "cinematic",
+  "phase": "edited",
+  "story": {
+    "title": "Abyss of Mars",
+    "logline": "A young astronaut uncovers a hidden ocean beneath the Martian surface, revealing secrets of life and isolation.",
+    "style": "cinematic",
+    "scenes": [
+      {
+        "scene_number": 1,
+        "heading": "EXT. MARTIAN LANDSCAPE — DAY",
+        "location": "A vast, desolate Martian terrain with distant mountains and a pale orange sky.",
+        "time_of_day": "DAY",
+        "mood": "hopeful",
+        "duration_seconds": 8.0,
+        "characters": [
+          "Lyra"
+        ],
+        "action": "Lyra scans the horizon, her eyes catching a glimmer of light reflecting off a hidden cave entrance.",
+        "visual_prompt": "A young astronaut, standing against a stark Martian landscape, with a cave entrance gleaming in the distance under a bright orange sky, cinematic lighting focusing on her face, art style inspired by modern sci-fi.",
+        "dialogue": [
+          {
+            "character": "Lyra",
+            "line": "What is that?",
+            "direction": "(breathless)"
+          }
+        ]
+      },
+      {
+        "scene_number": 2,
+        "heading": "INT. CAVE — DAY",
+        "location": "Inside the dark cave, bioluminescent plants glow softly along the walls.",
+        "time_of_day": "DAY",
+        "mood": "mysterious",
+        "duration_seconds": 8.0,
+        "characters": [
+          "Lyra"
+        ],
+        "action": "As she ventures deeper, Lyra discovers water sparkling with bioluminescent organisms dancing within.",
+        "visual_prompt": "An astronaut surrounded by glowing plants and shimmering water in a dark cave, soft blue and green lighting highlighting her amazed expression, art style reminiscent of ethereal fantasy.",
+        "dialogue": [
+          {
+            "character": "Lyra",
+            "line": "An ocean on Mars... incredible!",
+            "direction": "(in awe)"
+          }
+        ]
+      },
+      {
+        "scene_number": 3,
+        "heading": "EXT. MARTIAN OCEAN VIEW — DAY",
+        "location": "A breathtaking view of an underground ocean shimmering under a magical light.",
+        "time_of_day": "DAY",
+        "mood": "triumphant",
+        "duration_seconds": 8.0,
+        "characters": [
+          "Lyra"
+        ],
+        "action": "Lyra stands at the edge of the ocean, her reflection merging with the vibrant colors of the water, a smile lighting up her face.",
+        "visual_prompt": "A young astronaut gazing at a vast, shimmering underwater landscape, rays of light breaking through the surface, creating a magical atmosphere, art style blending realism with a dreamlike quality.",
+        "dialogue": [
+          {
+            "character": "Lyra",
+            "line": "Life finds a way, even here.",
+            "direction": "(with hope)"
+          }
+        ]
+      }
+    ],
+    "characters": [
+      {
+        "name": "Lyra",
+        "role": "protagonist",
+        "voice_style": "youthful",
+        "voice_id": "en-US-AnaNeural",
+        "appearance": "A bright-eyed astronaut in a sleek, modern space suit with a shimmering helmet reflecting the Martian landscape. Her hair is a vibrant shade of red, contrasting with her white suit.",
+        "personality": "Curious and adventurous, she possesses an unwavering determination to explore the unknown."
+      }
+    ]
+  },
+  "timing": {
+    "segments": [
+      {
+        "scene_id": 1,
+        "kind": "dialogue",
+        "character": "Lyra",
+        "audio_file": "audio/scene01_line01.mp3",
+        "start_ms": 0,
+        "end_ms": 1780,
+        "text": "What is that?"
+      },
+      {
+        "scene_id": 1,
+        "kind": "bgm",
+        "character": null,
+        "audio_file": "audio/scene01_bgm.wav",
+        "start_ms": 0,
+        "end_ms": 8000,
+        "text": "BGM (hopeful)"
+      },
+      {
+        "scene_id": 2,
+        "kind": "dialogue",
+        "character": "Lyra",
+        "audio_file": "audio/scene02_line01.mp3",
+        "start_ms": 8000,
+        "end_ms": 11480,
+        "text": "An ocean on Mars... incredible!"
+      },
+      {
+        "scene_id": 2,
+        "kind": "bgm",
+        "character": null,
+        "audio_file": "audio/scene02_bgm.wav",
+        "start_ms": 8000,
+        "end_ms": 16000,
+        "text": "BGM (mysterious)"
+      },
+      {
+        "scene_id": 3,
+        "kind": "dialogue",
+        "character": "Lyra",
+        "audio_file": "audio/scene03_line01.mp3",
+        "start_ms": 16000,
+        "end_ms": 19190,
+        "text": "Life finds a way, even here."
+      },
+      {
+        "scene_id": 3,
+        "kind": "bgm",
+        "character": null,
+        "audio_file": "audio/scene03_bgm.wav",
+        "start_ms": 16000,
+        "end_ms": 24000,
+        "text": "BGM (triumphant)"
+      }
+    ],
+    "total_duration_ms": 24000,
+    "bgm_track": null
+  },
+  "scene_videos": [
+    {
+      "scene_id": 1,
+      "image_file": "images/scene01.png",
+      "duration_seconds": 8.0,
+      "animation": "zoom_in"
+    },
+    {
+      "scene_id": 2,
+      "image_file": "images/scene02.png",
+      "duration_seconds": 8.0,
+      "animation": "zoom_in"
+    },
+    {
+      "scene_id": 3,
+      "image_file": "images/scene03.png",
+      "duration_seconds": 8.0,
+      "animation": "zoom_in"
+    }
+  ],
+  "final_video": "final_output.mp4",
+  "edit_log": [],
+  "notes": [
+    "Starting pipeline: A young astronaut discovers a hidden ocean on Mars"
+  ]
+}

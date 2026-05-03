@@ -1,0 +1,22 @@
+# Environment / virtualenvs
+.env
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Generated artefacts (keep the projects/ folder structure but not bulky binaries)
+outputs/projects/*/_parts/
+
+# OS
+.DS_Store
+Thumbs.db
