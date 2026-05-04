@@ -13,11 +13,14 @@ Returns a fully populated `TimingManifest`.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
+from phase1_story import tools as phase1_tools
 from phase2_audio.bgm import pick_bgm
-from phase2_audio.tts import estimate_ms, synthesize, voice_for
+from phase2_audio.tts import estimate_ms, prosody_for, synthesize, voice_for
 from schemas.pipeline import AudioSegment, Story, TimingManifest
 
 
@@ -30,6 +33,30 @@ async def _emit(cb: ProgressCb, msg: str) -> None:
     res = cb(msg)
     if asyncio.iscoroutine(res):
         await res
+
+
+def _load_emotion_map(project_dir: str) -> dict[tuple[int, int], str]:
+    """
+    Read Phase 1's `phase2_audio_handoff.json` (if present) and build a
+    {(scene_id, line_index): emotion} lookup. Returns {} if the file is
+    missing — callers fall back to recomputing emotions inline so tests
+    that skip the handoff still work.
+    """
+    path = Path(project_dir) / "phase2_audio_handoff.json"
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    out: dict[tuple[int, int], str] = {}
+    for seg in data.get("segments", []) or []:
+        try:
+            key = (int(seg["scene_id"]), int(seg["line_index"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        out[key] = str(seg.get("emotion") or "calm")
+    return out
 
 
 async def run_phase2(
@@ -47,6 +74,11 @@ async def run_phase2(
         c.voice_id = voices.get(c.name, "en-US-JennyNeural")
     await _emit(progress, f"[Phase2] Voices resolved: {voices}")
 
+    # Prefer Phase 1's persisted emotion tags; fall back to recomputing them.
+    emotion_map = _load_emotion_map(project_dir)
+    if emotion_map:
+        await _emit(progress, f"[Phase2] Loaded {len(emotion_map)} emotion tags from handoff")
+
     segments: list[AudioSegment] = []
     cursor_ms = 0
 
@@ -57,9 +89,16 @@ async def run_phase2(
         # Dialogue lines, sequential within a scene (so timing is monotonic).
         for idx, line in enumerate(scene.dialogue, start=1):
             voice = voices.get(line.character) or voice_for({"voice_style": "neutral", "role": ""})
+            emotion = emotion_map.get((scene.scene_number, idx - 1))
+            if emotion is None:
+                tagged = phase1_tools.analyze_emotions([line])["value"]
+                emotion = tagged[0]["emotion"] if tagged else "calm"
+            pros = prosody_for(emotion)
             fname = f"scene{scene.scene_number:02d}_line{idx:02d}.mp3"
             fpath = os.path.join(audio_dir, fname)
-            duration_ms = await synthesize(line.line, voice, fpath)
+            duration_ms = await synthesize(
+                line.line, voice, fpath, rate=pros["rate"], pitch=pros["pitch"],
+            )
             # synthesize() may have written .wav fallback — pick what's actually there.
             written = fpath if os.path.exists(fpath) else os.path.splitext(fpath)[0] + ".wav"
             segments.append(
@@ -104,6 +143,12 @@ async def run_phase2(
         total_duration_ms=cursor_ms,
         bgm_track=None,  # per-scene BGMs only — Phase 3 mixes them
     )
+
+    # Standalone manifest file — the spec calls this out by name.
+    manifest_path = Path(project_dir) / "timing_manifest.json"
+    manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+    await _emit(progress, f"[Phase2] Wrote {manifest_path.name}")
+
     await _emit(progress, f"[Phase2] Done — {len(segments)} segments, {cursor_ms / 1000:.1f}s total")
     return manifest
 

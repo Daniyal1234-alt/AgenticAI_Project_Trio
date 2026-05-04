@@ -42,6 +42,28 @@ _ROLE_VOICE_MAP = {
 }
 
 
+# Emotion → edge-tts prosody overrides (rate / pitch). Keeps the audio in
+# step with the script's emotional arc — a tense line speeds up and lowers
+# pitch, a melancholy line slows down and drops pitch, etc. The buckets
+# match `phase1_story.tools.analyze_emotions`.
+EMOTION_PROSODY: dict[str, dict[str, str]] = {
+    "calm":       {"rate": "-5%",  "pitch": "+0Hz"},
+    "tense":      {"rate": "+15%", "pitch": "-10Hz"},
+    "urgent":     {"rate": "+25%", "pitch": "+5Hz"},
+    "joyful":     {"rate": "+10%", "pitch": "+15Hz"},
+    "melancholy": {"rate": "-15%", "pitch": "-15Hz"},
+    "curious":    {"rate": "+0%",  "pitch": "+10Hz"},
+    "determined": {"rate": "+5%",  "pitch": "-5Hz"},
+}
+
+_NEUTRAL_PROSODY = {"rate": "+0%", "pitch": "+0Hz"}
+
+
+def prosody_for(emotion: str) -> dict[str, str]:
+    """Look up rate/pitch overrides for an emotion tag; unknowns return neutral."""
+    return EMOTION_PROSODY.get((emotion or "").lower(), dict(_NEUTRAL_PROSODY))
+
+
 def voice_for(character) -> str:
     """Resolve a TTS voice ID from a Character (or dict-like)."""
     if isinstance(character, dict):
@@ -59,12 +81,22 @@ def estimate_ms(text: str, wpm: int = 165) -> int:
     return int(words / wpm * 60_000)
 
 
-async def synthesize(text: str, voice: str, out_path: str) -> int:
+async def synthesize(
+    text: str,
+    voice: str,
+    out_path: str,
+    *,
+    rate: str = "+0%",
+    pitch: str = "+0Hz",
+) -> int:
     """
     Synthesize `text` into `out_path` (MP3) and return the duration in ms.
 
     Uses edge-tts; falls back to a silent WAV if anything goes wrong.
     `out_path` decides extension: edge-tts writes MP3, fallback writes WAV.
+
+    `rate` and `pitch` follow edge-tts's syntax (e.g. "+15%", "-10Hz").
+    Defaults are no-ops so existing callers behave identically.
     """
     text = (text or "").strip()
     if not text:
@@ -77,7 +109,7 @@ async def synthesize(text: str, voice: str, out_path: str) -> int:
         import edge_tts  # type: ignore
 
         # edge-tts always writes an MP3 stream regardless of out_path extension.
-        comm = edge_tts.Communicate(text, voice)
+        comm = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
         await comm.save(out_path)
         if os.path.getsize(out_path) > 200:  # got real audio
             return _probe_duration_ms(out_path) or estimate_ms(text)
