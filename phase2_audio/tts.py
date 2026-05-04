@@ -21,6 +21,10 @@ from typing import Optional
 
 
 # Sensible Edge-TTS voice picks per style hint.
+# IMPORTANT: only use voices that currently exist on Microsoft's TTS service.
+# Retired voices return `NoAudioReceived: No audio was received` and silently
+# fall through to the silent-WAV path. Verify with `edge_tts.list_voices()`
+# before adding entries.
 _STYLE_VOICE_MAP = {
     "warm": "en-US-AriaNeural",
     "narrator": "en-GB-RyanNeural",
@@ -30,7 +34,9 @@ _STYLE_VOICE_MAP = {
     "whispered": "en-US-JennyNeural",
     "cheerful": "en-US-JennyNeural",
     "youthful": "en-US-AnaNeural",
-    "determined": "en-US-DavisNeural",
+    # Was en-US-DavisNeural — retired by Microsoft. en-US-GuyNeural is the
+    # closest live male voice with a similar timbre.
+    "determined": "en-US-GuyNeural",
     "neutral": "en-US-JennyNeural",
 }
 
@@ -40,6 +46,9 @@ _ROLE_VOICE_MAP = {
     "antagonist": "en-US-GuyNeural",
     "supporting": "en-US-JennyNeural",
 }
+
+# Known-good voice used when the chosen voice is rejected by edge-tts.
+_FALLBACK_VOICE = "en-US-AriaNeural"
 
 
 # Emotion → edge-tts prosody overrides (rate / pitch). Keeps the audio in
@@ -92,8 +101,9 @@ async def synthesize(
     """
     Synthesize `text` into `out_path` (MP3) and return the duration in ms.
 
-    Uses edge-tts; falls back to a silent WAV if anything goes wrong.
-    `out_path` decides extension: edge-tts writes MP3, fallback writes WAV.
+    Uses edge-tts with up to 3 retries (Microsoft's free endpoint occasionally
+    drops a connection mid-stream). If every attempt fails, falls back to a
+    silent WAV at the estimated duration so downstream phases keep working.
 
     `rate` and `pitch` follow edge-tts's syntax (e.g. "+15%", "-10Hz").
     Defaults are no-ops so existing callers behave identically.
@@ -104,18 +114,66 @@ async def synthesize(
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
 
-    # Try edge-tts first.
+    # Try edge-tts up to 3 times.
     try:
         import edge_tts  # type: ignore
+    except ImportError:
+        edge_tts = None  # type: ignore
 
-        # edge-tts always writes an MP3 stream regardless of out_path extension.
-        comm = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
-        await comm.save(out_path)
-        if os.path.getsize(out_path) > 200:  # got real audio
-            return _probe_duration_ms(out_path) or estimate_ms(text)
-    except Exception:
-        # fall through to silent fallback
-        pass
+    if edge_tts is not None:
+        import asyncio  # local import to avoid pollution at module level
+        import sys
+
+        # Try the requested voice first; on a NoAudioReceived (e.g. the voice
+        # has been retired by MS) fall back to a known-good voice so the line
+        # still gets real speech instead of silence.
+        voices_to_try = [voice]
+        if voice != _FALLBACK_VOICE:
+            voices_to_try.append(_FALLBACK_VOICE)
+
+        last_error: Exception | None = None
+        for v in voices_to_try:
+            for attempt in range(3):
+                try:
+                    comm = edge_tts.Communicate(text, v, rate=rate, pitch=pitch)
+                    await comm.save(out_path)
+                    if os.path.getsize(out_path) > 200:  # got real audio
+                        if v != voice:
+                            print(
+                                f"[Phase2] voice {voice!r} rejected — used "
+                                f"fallback {v!r} instead",
+                                file=sys.stderr, flush=True,
+                            )
+                        return _probe_duration_ms(out_path) or estimate_ms(text)
+                    last_error = RuntimeError(
+                        f"edge-tts wrote {os.path.getsize(out_path)} bytes (<200)"
+                    )
+                except Exception as exc:
+                    last_error = exc
+                # Linear backoff between attempts.
+                await asyncio.sleep(0.4 * (attempt + 1))
+
+            # Don't waste backoff on the fallback voice if the first voice
+            # got `NoAudioReceived` (definite voice rejection — not transient).
+            if last_error and "NoAudio" in type(last_error).__name__:
+                continue
+            break  # transient errors won't be helped by switching voices
+
+        if last_error is not None:
+            print(
+                f"[Phase2] edge-tts failed after retries for "
+                f"voice={voice!r} text={text[:60]!r}: "
+                f"{type(last_error).__name__}: {last_error}",
+                file=sys.stderr, flush=True,
+            )
+
+    # All attempts failed — clean up any partial/empty MP3 so the pipeline's
+    # file-picker chooses the WAV fallback instead.
+    if os.path.exists(out_path):
+        try:
+            os.unlink(out_path)
+        except OSError:
+            pass
 
     # Fallback — write a silent WAV at the estimated duration.
     fallback_path = os.path.splitext(out_path)[0] + ".wav"
@@ -135,21 +193,34 @@ def _write_silent_wav(path: str, duration_ms: int, sample_rate: int = 22_050) ->
 
 def _probe_duration_ms(path: str) -> Optional[int]:
     """
-    Try to read duration from a media file. Best-effort — return None if we
-    can't tell. moviepy/ffprobe both work; we use moviepy because it's already
-    a dependency.
+    Read duration from an audio/video file via ffprobe.
+
+    We avoid MoviePy here on purpose — its `AudioFileClip.__del__` can leak a
+    child ffmpeg subprocess under pytest, which races with subsequent ffmpeg
+    invocations. ffprobe ships next to ffmpeg in `imageio-ffmpeg`'s binaries
+    on every install.
     """
-    # MoviePy 2.x: top-level import. MoviePy 1.x: moviepy.editor.
-    AudioFileClip = None
+    import shutil
+    import subprocess
+
+    ffprobe_path = None
     try:
-        from moviepy import AudioFileClip  # type: ignore
-    except ImportError:
-        try:
-            from moviepy.editor import AudioFileClip  # type: ignore
-        except ImportError:
-            return None
+        import imageio_ffmpeg  # type: ignore
+        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+        candidate = ffmpeg_path.replace("ffmpeg.exe", "ffprobe.exe").replace("ffmpeg", "ffprobe")
+        if os.path.isfile(candidate):
+            ffprobe_path = candidate
+    except Exception:
+        pass
+    ffprobe_path = ffprobe_path or shutil.which("ffprobe")
+    if not ffprobe_path:
+        return None
     try:
-        with AudioFileClip(path) as clip:
-            return int(clip.duration * 1000)
+        result = subprocess.run(
+            [ffprobe_path, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            check=True, capture_output=True, timeout=10,
+        )
+        return int(float(result.stdout.decode().strip()) * 1000)
     except Exception:
         return None

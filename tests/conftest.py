@@ -5,6 +5,7 @@ import sys
 
 # Force every phase into its offline / stub path. Don't trust the dev's .env.
 os.environ.pop("OPENAI_API_KEY", None)
+os.environ.pop("KAGGLE_ENDPOINT", None)
 os.environ["IMAGE_BACKEND"] = "placeholder"
 
 # Make sure the project root is on sys.path even when pytest is run from elsewhere.

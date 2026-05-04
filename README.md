@@ -82,6 +82,17 @@ Phase 3 ships a stylised PIL placeholder image generator, and Phase 5 uses a
 rule-based intent classifier when no LLM is available. Setting `OPENAI_API_KEY`
 turns on creative LLM-driven story generation and intelligent edit classification.
 
+### Phase 3 rich path (optional)
+
+For real per-scene visuals (Stable Diffusion stills + Stable Video Diffusion
+ambient motion + Wav2Lip lip-sync), spin up the Kaggle inference server —
+see [`docs/kaggle_setup.md`](docs/kaggle_setup.md). Paste
+[`docs/kaggle_phase3_server.py`](docs/kaggle_phase3_server.py) into a Kaggle
+GPU notebook, copy the printed ngrok URL into your local `.env` as
+`KAGGLE_ENDPOINT=...`, and Phase 3 starts hitting the remote endpoints
+automatically. Without it, Phase 3 falls back to FFmpeg passthrough clips
+(static face + audio, no mouth motion) — a valid MP4 either way.
+
 ---
 
 ## CLI
@@ -138,9 +149,13 @@ WebSocket progress:
 │   └── pipeline.py                    – Walks Story → AudioSegment[] + TimingManifest
 │
 ├── phase3_video/                    # Member 2 (shared)
-│   ├── image_gen.py                   – DALL-E 3 (optional) or PIL placeholder
-│   ├── compositor.py                  – MoviePy v1/v2 + ffmpeg + slideshow fallback
-│   └── pipeline.py                    – Per-scene image + final MP4
+│   ├── image_gen.py                   – SDXL-Turbo (optional) → DALL-E 3 → PIL fallback
+│   ├── animation.py                   – FFmpeg zoompan Ken Burns clips
+│   ├── svd.py                         – Stable Video Diffusion remote client
+│   ├── lipsync.py                     – Wav2Lip remote client + passthrough
+│   ├── compositor.py                  – Line-clip stitching, BGM mix, drawtext subs, xfade
+│   ├── _http.py                       – shared HTTP helper for Kaggle endpoints
+│   └── pipeline.py                    – Per-scene+per-line orchestration → final MP4
 │
 ├── phase4_web/                      # Member 3
 │   ├── api.py                         – FastAPI: REST + WebSocket progress

@@ -1,15 +1,21 @@
 """
 Per-scene image generation.
 
-Two paths:
-1. If OPENAI_API_KEY is set + IMAGE_BACKEND=openai, call DALL-E 3 / gpt-image-1.
-2. Otherwise (default), render a stylised PIL placeholder driven by mood +
-   visual_prompt + character names. Looks deliberately like a film still —
-   gradient sky, vignette, scene heading typeset on top — so the demo video
-   looks intentional even without paid APIs.
+Three-tier backend chain, picked by `IMAGE_BACKEND` env var (default `auto`):
 
-Public: `generate_scene_image(scene, story, out_path) -> path`
-        `apply_filter(path, filter_name, out_path) -> path`  (used by Phase 5)
+1. **sdxl**   — local Stable Diffusion XL Turbo via `diffusers`. Lazy-loaded
+                on first call; subsequent calls reuse the cached pipeline.
+                Falls through if `diffusers` / `torch` aren't installed or the
+                model can't load.
+2. **openai** — DALL-E 3 / gpt-image-1 (existing path). Skipped if no API key.
+3. **placeholder** — PIL stylised gradient + silhouettes + caption (existing
+                path). Always works.
+
+Two public renderers:
+    `generate_scene_image(scene, story, out_path)`   — establishing shot
+    `generate_speaker_image(scene, character, story, out_path)` — close-up
+                                                         portrait for Wav2Lip
+Plus the unchanged `apply_filter(...)` used by Phase 5.
 """
 
 from __future__ import annotations
@@ -22,7 +28,8 @@ from typing import Optional
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
-from schemas.pipeline import Scene, Story
+from phase3_video import _http
+from schemas.pipeline import Character, Scene, Story
 
 
 WIDTH, HEIGHT = 1280, 720
@@ -148,8 +155,10 @@ def _render_placeholder(scene: Scene, story: Story, out_path: str) -> str:
     return out_path
 
 
-def _render_openai(scene: Scene, story: Story, out_path: str) -> Optional[str]:
+def _render_openai(prompt: str, out_path: str) -> Optional[str]:
     """Try DALL-E 3 / gpt-image-1 via OpenAI Images API. Returns None on failure."""
+    if not os.getenv("OPENAI_API_KEY"):
+        return None
     try:
         import requests
         from openai import OpenAI
@@ -157,7 +166,6 @@ def _render_openai(scene: Scene, story: Story, out_path: str) -> Optional[str]:
         client = OpenAI()
         model = os.getenv("OPENAI_IMAGE_MODEL", "dall-e-3")
         size = os.getenv("OPENAI_IMAGE_SIZE", "1792x1024")
-        prompt = scene.visual_prompt or f"{story.style} still: {scene.action}"
         if model == "dall-e-3":
             response = client.images.generate(
                 model=model, prompt=prompt, size=size, quality="standard", n=1
@@ -167,21 +175,213 @@ def _render_openai(scene: Scene, story: Story, out_path: str) -> Optional[str]:
             resp.raise_for_status()
             with open(out_path, "wb") as f:
                 f.write(resp.content)
+            # Normalise to our 1280x720 working size.
+            try:
+                Image.open(out_path).convert("RGB").resize((WIDTH, HEIGHT)).save(out_path, "PNG")
+            except Exception:
+                pass
             return out_path
     except Exception:
         return None
     return None
 
 
-def generate_scene_image(scene: Scene, story: Story, out_path: str) -> str:
-    """Generate an image for a scene and write it to `out_path`."""
-    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    backend = os.getenv("IMAGE_BACKEND", "placeholder").lower()
-    if backend == "openai":
-        result = _render_openai(scene, story, out_path)
+# --------------------------------------------------------------------------- #
+# Local SDXL-Turbo backend (lazy-loaded — never imports torch/diffusers at    #
+# module import time, so the placeholder path stays zero-dependency).         #
+# --------------------------------------------------------------------------- #
+
+
+_SDXL_PIPELINE = None    # populated on first successful load
+_SDXL_FAILED = False     # latches True after a load failure to avoid retries
+
+
+def _sdxl_pipeline():
+    """Return a cached SDXL-Turbo pipeline, or None if it can't be loaded."""
+    global _SDXL_PIPELINE, _SDXL_FAILED
+    if _SDXL_PIPELINE is not None:
+        return _SDXL_PIPELINE
+    if _SDXL_FAILED:
+        return None
+    try:
+        import torch  # type: ignore
+        from diffusers import AutoPipelineForText2Image  # type: ignore
+
+        model_id = os.getenv("SDXL_MODEL_ID", "stabilityai/sdxl-turbo")
+        # CPU build — float32 is required (float16 silently misbehaves on CPU).
+        pipe = AutoPipelineForText2Image.from_pretrained(
+            model_id, torch_dtype=torch.float32, variant=None
+        )
+        pipe.to("cpu")
+        # Disable safety checker to save RAM on CPU; outputs are story stills.
+        if hasattr(pipe, "safety_checker"):
+            pipe.safety_checker = None
+        _SDXL_PIPELINE = pipe
+        return pipe
+    except Exception:
+        _SDXL_FAILED = True
+        return None
+
+
+def _render_sdxl(prompt: str, out_path: str, *, seed: int = 0) -> Optional[str]:
+    """Generate one image via SDXL-Turbo at 1 inference step (LOCAL CPU)."""
+    pipe = _sdxl_pipeline()
+    if pipe is None:
+        return None
+    try:
+        import torch  # type: ignore
+        gen = torch.Generator(device="cpu").manual_seed(int(seed))
+        result = pipe(
+            prompt=prompt,
+            num_inference_steps=int(os.getenv("SDXL_STEPS", "1")),
+            guidance_scale=0.0,
+            generator=gen,
+        )
+        img = result.images[0].convert("RGB").resize((WIDTH, HEIGHT))
+        img.save(out_path, "PNG")
+        return out_path
+    except Exception:
+        return None
+
+
+# --------------------------------------------------------------------------- #
+# Remote SDXL backend — calls the Kaggle FastAPI server's /sdxl endpoint.     #
+# Preferred over local SDXL whenever KAGGLE_ENDPOINT is set, because the      #
+# model is 13 GB and inference on CPU is glacial.                             #
+# --------------------------------------------------------------------------- #
+
+
+def _render_remote_sdxl(prompt: str, out_path: str, *, seed: int = 0) -> Optional[str]:
+    """Generate via the remote SDXL endpoint. Returns None if anything fails."""
+    if not _http.have_endpoint():
+        return None
+    payload = {
+        "prompt": prompt,
+        "seed": int(seed),
+        "width": WIDTH,
+        "height": HEIGHT,
+    }
+    resp = _http.post_endpoint("sdxl", payload, timeout=120.0)
+    if not resp or "image_b64" not in resp:
+        return None
+    try:
+        _http.b64_to_file(resp["image_b64"], out_path)
+        return out_path
+    except Exception:
+        return None
+
+
+# --------------------------------------------------------------------------- #
+# Public renderers — both walk the same three-tier backend chain.             #
+# --------------------------------------------------------------------------- #
+
+
+def _backend_chain(prompt: str, out_path: str, *, seed: int) -> Optional[str]:
+    """
+    Try the image backends in priority order. Returns the path on success or
+    None if every tier failed (caller falls back to PIL placeholder).
+
+    IMAGE_BACKEND values:
+        auto         (default) remote SDXL (if KAGGLE_ENDPOINT set) → local SDXL
+                     (if no endpoint) → DALL-E (if OPENAI_API_KEY) → placeholder
+        remote-sdxl  remote only — fails if endpoint is unset/unreachable
+        local-sdxl   local diffusers only — slow on CPU but works offline
+        sdxl         alias of `auto` for back-compat
+        openai       DALL-E 3 only
+        placeholder  PIL stylised gradient (always works)
+    """
+    backend = os.getenv("IMAGE_BACKEND", "auto").lower()
+
+    # Tier 1 — remote SDXL via Kaggle (T4 GPU). Preferred when available.
+    if backend in ("auto", "sdxl", "remote-sdxl") and _http.have_endpoint():
+        result = _render_remote_sdxl(prompt, out_path, seed=seed)
         if result:
             return result
+        if backend == "remote-sdxl":
+            return None  # explicit remote request — don't silently fall back
+
+    # Tier 2 — local SDXL via diffusers (CPU, 13 GB model). Only attempted
+    # in `auto` mode when no endpoint is configured, to avoid a multi-hour
+    # download on machines that don't actually want it.
+    if backend == "local-sdxl" or (
+        backend in ("auto", "sdxl") and not _http.have_endpoint()
+    ):
+        result = _render_sdxl(prompt, out_path, seed=seed)
+        if result:
+            return result
+        if backend == "local-sdxl":
+            return None
+
+    # Tier 3 — DALL-E 3 (paid API).
+    if backend in ("auto", "openai"):
+        result = _render_openai(prompt, out_path)
+        if result:
+            return result
+        if backend == "openai":
+            return None
+
+    return None
+
+
+def generate_scene_image(scene: Scene, story: Story, out_path: str) -> str:
+    """Generate an establishing-shot image for a scene."""
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+
+    prompt = scene.visual_prompt or (
+        f"{story.style} animated film still, {scene.location or 'a dramatic setting'}, "
+        f"{(scene.time_of_day or 'day').lower()} lighting, mood: {scene.mood}, "
+        f"action: {(scene.action or 'a quiet moment')[:120]}, "
+        "ultra detailed, 16:9, dramatic composition"
+    )
+    seed = int(_seeded_rng(scene, story.title).randrange(2**31))
+
+    rendered = _backend_chain(prompt, out_path, seed=seed)
+    if rendered:
+        return rendered
     return _render_placeholder(scene, story, out_path)
+
+
+def generate_speaker_image(
+    scene: Scene, character_name: str, story: Story, out_path: str
+) -> str:
+    """
+    Close-up portrait of one named speaker — composed for Wav2Lip's face
+    detector (centred face, looking at camera, sharp focus).
+
+    Falls back to the same scene placeholder if neither SDXL nor DALL-E
+    is reachable. Wav2Lip then can't find a face on the placeholder
+    silhouette and the lip-sync layer drops to passthrough — still a
+    valid output, just no mouth motion.
+    """
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+
+    char: Optional[Character] = next(
+        (c for c in story.characters if c.name == character_name), None
+    )
+    appearance = ((char.appearance if char else "") or "calm expression").strip()
+    # CLIP truncates at 77 tokens. Trim appearance + drop redundant adjectives
+    # so the suffix ("centred face, looking at camera") survives intact —
+    # that part is what makes the output usable for Wav2Lip face detection.
+    appearance = appearance[:80]
+    location = (scene.location or "evocative setting")[:40]
+    prompt = (
+        f"close-up portrait, {character_name}, {appearance}, "
+        f"{location}, {scene.mood} mood, "
+        f"{(scene.time_of_day or 'day').lower()} light, "
+        f"{story.style} style, centred face, looking at camera, sharp focus"
+    )
+    seed = _seed_for_character(character_name)
+
+    rendered = _backend_chain(prompt, out_path, seed=seed)
+    if rendered:
+        return rendered
+    return _render_placeholder(scene, story, out_path)
+
+
+def _seed_for_character(name: str) -> int:
+    """Deterministic seed per character so the same person looks consistent across scenes."""
+    h = hashlib.sha1((name or "unknown").encode("utf-8")).hexdigest()
+    return int(h[:8], 16)
 
 
 # --------------------------------------------------------------------------- #
@@ -225,4 +425,10 @@ def apply_filter(in_path: str, filter_name: str, out_path: str) -> str:
     return out_path
 
 
-__all__ = ["generate_scene_image", "apply_filter", "WIDTH", "HEIGHT"]
+__all__ = [
+    "generate_scene_image",
+    "generate_speaker_image",
+    "apply_filter",
+    "WIDTH",
+    "HEIGHT",
+]

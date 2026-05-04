@@ -99,8 +99,14 @@ async def run_phase2(
             duration_ms = await synthesize(
                 line.line, voice, fpath, rate=pros["rate"], pitch=pros["pitch"],
             )
-            # synthesize() may have written .wav fallback — pick what's actually there.
-            written = fpath if os.path.exists(fpath) else os.path.splitext(fpath)[0] + ".wav"
+            # synthesize() may have written a .wav fallback when edge-tts failed.
+            # Pick the MP3 only if it exists AND has real bytes (>200 — empty/
+            # truncated streams from a dropped connection look like 0-byte files).
+            wav_fallback = os.path.splitext(fpath)[0] + ".wav"
+            if os.path.exists(fpath) and os.path.getsize(fpath) > 200:
+                written = fpath
+            else:
+                written = wav_fallback
             segments.append(
                 AudioSegment(
                     scene_id=scene.scene_number,

@@ -148,15 +148,38 @@ async def apply_edit(
             filt = intent.parameters.get("filter", "darken")
             await _emit(progress, f"[Edit] Applying filter '{filt}' to scenes {sorted(affected)}")
             images_dir = os.path.join(project_dir, "images")
+            clips_dir = os.path.join(project_dir, "clips")
+            import glob
             for sid in sorted(affected):
-                path = os.path.join(images_dir, f"scene{sid:02d}.png")
-                if os.path.isfile(path):
-                    await asyncio.to_thread(apply_filter, path, filt, path)
-            await _emit(progress, "[Edit] Recompositing")
-            # scope_filter=set() means "regenerate nothing — reuse all images on disk"
+                # Filter the main scene image.
+                main_path = os.path.join(images_dir, f"scene{sid:02d}.png")
+                if os.path.isfile(main_path):
+                    await asyncio.to_thread(apply_filter, main_path, filt, main_path)
+                # Also filter every per-line speaker portrait so the change
+                # actually shows up in the lip-synced clips.
+                for line_img in glob.glob(os.path.join(images_dir, f"scene{sid:02d}_line*.png")):
+                    await asyncio.to_thread(apply_filter, line_img, filt, line_img)
+                # Invalidate cached SVD + Wav2Lip clips for this scene so
+                # run_phase3 re-renders them from the (now filtered) inputs.
+                if os.path.isdir(clips_dir):
+                    for clip in glob.glob(os.path.join(clips_dir, f"scene{sid:02d}_line*.mp4")):
+                        try:
+                            os.unlink(clip)
+                        except OSError:
+                            pass
+                    # Drop the per-scene composited clip too — must be rebuilt.
+                    scene_clip = os.path.join(clips_dir, f"scene{sid:02d}.mp4")
+                    if os.path.isfile(scene_clip):
+                        try:
+                            os.unlink(scene_clip)
+                        except OSError:
+                            pass
+            await _emit(progress, "[Edit] Recompositing affected scenes")
+            # scope_filter=affected → re-render those scenes from the filtered
+            # inputs (image gen is cached so this just rebuilds the clips).
             result = await run_phase3(
                 state.story, manifest, project_dir,
-                regenerate=False, scope_filter=set(),
+                regenerate=False, scope_filter=affected,
                 subtitles=True, speed=1.0,
                 progress=progress,
             )
