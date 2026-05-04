@@ -16,12 +16,12 @@ with full version history and one-click undo at any granularity.
 
 | Member | Roll # | Primary phases |
 | --- | --- | --- |
-| **Hussain Ali Zaidi** | 22i-0902 | Phase 1 — Story / Script / Character generation |
+| **Muhammad Daniyal Aziz** | 22i-0753 | Phase 1 — Story / Script / Character generation |
 | **Hamza Ahmed** | 22i-1339 | Phase 2 — Audio (TTS + BGM + timing manifest) · Phase 3 — Video composition |
-| **Muhammad Daniyal Aziz** | 22i-0753 | Phase 4 — FastAPI backend + frontend · Phase 5 — Edit Agent + Undo |
+| **Hussain Ali Zaidi** | 22i-0902 | Phase 4 — FastAPI backend + frontend · Phase 5 — Edit Agent + Undo |
+| **Saifullah Khalid** | 22i-1312 | Project report |
 
-The shared JSON schema, integration testing, and the final report are joint
-work of all three members.
+The shared JSON schema and integration testing are joint work of all four members.
 
 ---
 
