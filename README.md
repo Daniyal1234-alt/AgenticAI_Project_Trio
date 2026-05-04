@@ -3,11 +3,12 @@
 > **Course:** Agentic AI · Spring 2026 · National University of Computer & Emerging Sciences, Islamabad
 > **Project Type:** Full-stack multi-agent AI system
 
-From a single natural-language prompt, this system writes a story, voices the
-characters, generates the visuals, composites a final MP4, and lets you edit
-the result by typing **plain-English commands** like *"make scene 2 darker"*
-or *"change the narrator's voice to whispered"* — with full version history
-and one-click undo at any granularity.
+From a single natural-language prompt, this system writes a story, casts
+characters, voices each line with emotion-aware TTS, generates per-scene
+visuals, **lip-syncs** mouth motion to the dialogue, composites a final MP4,
+and lets you edit the result by typing **plain-English commands** like
+*"make scene 2 darker"* or *"change the narrator's voice to whispered"* —
+with full version history and one-click undo at any granularity.
 
 ---
 
@@ -29,11 +30,12 @@ work of all three members.
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                                                                     │
-│   prompt          Phase 1            Phase 2          Phase 3       │
-│   "An astronaut   Story+Script+      TTS + BGM        Per-scene     │
-│   discovers a   ─►Characters     ──► + timing      ──► images +     │
-│   hidden ocean    (LangGraph)        manifest          MoviePy MP4  │
-│   on Mars"                                                          │
+│   prompt        Phase 1          Phase 2         Phase 3            │
+│   "An astro-    Story → Char     edge-tts +      SDXL still →       │
+│   naut...    ─► → Script         emotion         SVD motion →       │
+│                 (3 LangGraph     prosody +       Wav2Lip lip-       │
+│                  agents +        BGM +           sync + Ken Burns   │
+│                  6 named tools)  timing.json     + xfade → MP4      │
 │                       │                                             │
 │                       ▼                                             │
 │                 ┌───────────────────────────────────────┐           │
@@ -54,6 +56,11 @@ work of all three members.
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+The heavy Phase 3 models (SDXL · SVD · Wav2Lip) run **remotely on a Kaggle
+GPU notebook** exposed via ngrok — opt-in. Without an endpoint set, Phase 3
+falls through to a stylised PIL placeholder + FFmpeg passthrough so the
+pipeline always produces a valid (less rich) MP4.
 
 ---
 
@@ -76,11 +83,13 @@ uvicorn phase4_web.api:app --host 127.0.0.1 --port 8000 --reload
 python main.py --prompt "A young astronaut discovers a hidden ocean on Mars"
 ```
 
-The system **runs without any API keys** — Phase 1 falls back to a deterministic
-stub story, Phase 2 uses free Microsoft `edge-tts` voices (no key needed),
-Phase 3 ships a stylised PIL placeholder image generator, and Phase 5 uses a
-rule-based intent classifier when no LLM is available. Setting `OPENAI_API_KEY`
-turns on creative LLM-driven story generation and intelligent edit classification.
+The system **runs without any API keys** — Phase 1 falls through three
+agents to a deterministic stub story, Phase 2 uses free Microsoft `edge-tts`
+voices (no key needed) with a runtime voice-fallback safety net, Phase 3
+ships a stylised PIL placeholder + FFmpeg passthrough lip-sync, and Phase 5
+uses a rule-based intent classifier when no LLM is available. Setting
+`OPENAI_API_KEY` turns on creative LLM-driven story generation and
+intelligent edit classification.
 
 ### Phase 3 rich path (optional)
 
@@ -140,13 +149,26 @@ WebSocket progress:
 │   └── llm.py                         – Shared LLM helper + offline stubs
 │
 ├── phase1_story/                    # Member 1
-│   ├── agent.py                       – LangGraph: generate → validate → enrich
-│   └── prompts.py                     – Few-shot prompt templates
+│   ├── agent.py                       – 3-node LangGraph: story → character → script
+│   │                                    + serialize, with retry + error_handler
+│   ├── prompts.py                     – Per-agent prompt templates (3 of them)
+│   ├── tools.py                       – 6 named tools: validate_story_arc,
+│   │                                    estimate_duration, check_consistency,
+│   │                                    build_visual_prompt, validate_duration,
+│   │                                    analyze_emotions
+│   └── serializer.py                  – Writes 6 handoff JSONs into current/:
+│                                        story · characters · script ·
+│                                        phase2_audio_handoff · phase3_video_handoff
+│                                        · summary
 │
 ├── phase2_audio/                    # Member 2
-│   ├── tts.py                         – Edge-TTS (free) + silent-WAV fallback
+│   ├── tts.py                         – Edge-TTS (free) + 3-attempt retry +
+│   │                                    runtime fallback voice on rejection +
+│   │                                    EMOTION_PROSODY (rate/pitch per emotion)
 │   ├── bgm.py                         – Procedural mood-tinted BGM (numpy/wave)
-│   └── pipeline.py                    – Walks Story → AudioSegment[] + TimingManifest
+│   └── pipeline.py                    – Walks Story → AudioSegment[] +
+│                                        writes timing_manifest.json + reads
+│                                        Phase 1's audio handoff for emotion tags
 │
 ├── phase3_video/                    # Member 2 (shared)
 │   ├── image_gen.py                   – SDXL-Turbo (optional) → DALL-E 3 → PIL fallback
@@ -167,11 +189,11 @@ WebSocket progress:
 │   ├── executor.py                    – Maps EditIntent → targeted phase re-runs
 │   └── state_manager.py               – Append-only versioned snapshots, full undo
 │
-├── tests/                           # 29 tests, all offline-runnable
-│   ├── conftest.py
-│   ├── test_phase1_story.py            (3 tests)
-│   ├── test_phase2_audio.py            (5 tests)
-│   ├── test_phase3_video.py            (3 tests)
+├── tests/                           # 46 tests, all offline-runnable
+│   ├── conftest.py                    – pops OPENAI_API_KEY + KAGGLE_ENDPOINT
+│   ├── test_phase1_story.py            (11 tests — 3 e2e + 7 tools + serializer)
+│   ├── test_phase2_audio.py            (9 tests — TTS + BGM + manifest + prosody)
+│   ├── test_phase3_video.py            (8 tests — image + ken_burns + svd + lipsync)
 │   ├── test_phase4_api.py              (3 tests)
 │   └── test_phase5_edit.py             (15 tests — incl. 11 distinct query types)
 │
@@ -182,7 +204,11 @@ WebSocket progress:
 │
 ├── assets/bgm/                      # Drop *.mp3 named tense.mp3 / hopeful.mp3 / …
 │                                      to override the procedural BGM.
-└── docs/architecture.md             # Detailed phase-by-phase write-up
+└── docs/
+    ├── architecture.md              # Detailed phase-by-phase write-up
+    ├── kaggle_setup.md              # Per-session runbook for the Kaggle server
+    └── kaggle_phase3_server.py      # Paste-into-Kaggle FastAPI app:
+                                       SDXL + SVD + Wav2Lip behind one ngrok tunnel
 ```
 
 ---
@@ -220,23 +246,75 @@ This is the contract. Every phase boundary tests round-trip through this schema.
 ## Phase-by-phase highlights
 
 ### Phase 1 — Story, Script, Character (Member 1)
-- **LangGraph** StateGraph: `generate_story → validate_story → (retry once if invalid) → enrich_visuals`.
-- Pydantic-validated structured output: structural errors caught locally, semantic errors (speaker not in roster, non-contiguous scene numbers) flagged per scene.
-- Every scene leaves with a `visual_prompt` ready for Phase 3.
-- Graceful offline fallback: `schemas/llm.py:stub_story` produces a complete schema-valid story when no API key is set.
+- **Three-agent LangGraph** matching the spec diagram:
+  `story_agent → character_agent → script_agent → serialize`, each with its
+  own retry node and a shared `error_handler` that falls through to the
+  deterministic stub when the LLM keeps failing.
+- **Six named tool functions** in [`phase1_story/tools.py`](phase1_story/tools.py) —
+  `validate_story_arc`, `estimate_duration`, `check_consistency`,
+  `build_visual_prompt`, `validate_duration`, `analyze_emotions`. Pure
+  Python, deterministic, individually unit-tested.
+- **Six handoff JSONs** written by [`phase1_story/serializer.py`](phase1_story/serializer.py)
+  into `current/`: `story.json`, `characters.json`, `script.json`,
+  `phase2_audio_handoff.json` (per-line emotion tags + voice configs),
+  `phase3_video_handoff.json` (visual prompts + camera + transitions),
+  `summary.json` (run status + tool log + artifact paths).
+- Graceful offline fallback chain: each agent has its own stub
+  (`stub_outline`, `stub_roster`, `stub_script`); after exhausted retries
+  the error handler reuses the original `stub_story` so the pipeline
+  always produces a schema-valid `Story`.
 
 ### Phase 2 — Audio (Member 2)
-- **Free TTS:** `edge-tts` ships zero-config Microsoft Edge voices over the network, no key required.
-- Per-character voice resolution from `voice_style` and `role` heuristics.
-- Per-scene **procedural BGM** generated with `numpy` + `wave` (mood → fundamental frequency); drop your own `.mp3` into `assets/bgm/<mood>.mp3` to override.
-- **Timing manifest** with `start_ms` / `end_ms` per segment is the contract Phase 3 consumes.
+- **Free TTS:** `edge-tts` ships zero-config Microsoft Edge voices over the
+  network, no API key required. Wrapped with **3-attempt retries +
+  exponential backoff** for transient drops.
+- **Runtime voice fallback:** if Microsoft retires a mapped voice (we hit
+  `en-US-DavisNeural` mid-project), `synthesize()` automatically retries
+  with a known-good voice (`en-US-AriaNeural`) and logs the swap to stderr
+  so the next maintainer sees what happened.
+- **Emotion-driven prosody:** Phase 1's `analyze_emotions` tool tags every
+  dialogue line; Phase 2 reads that handoff and passes per-line `rate` /
+  `pitch` to edge-tts. A 7-bucket `EMOTION_PROSODY` table maps
+  `tense / urgent / joyful / melancholy / curious / determined / calm`
+  to concrete edge-tts kwargs.
+- Per-scene **procedural BGM** generated with `numpy` + `wave`
+  (mood → fundamental frequency); drop your own `.mp3` into
+  `assets/bgm/<mood>.mp3` to override.
+- **`timing_manifest.json` is written to disk as a standalone file** —
+  the spec calls this artifact out by name. Each segment carries
+  `scene_id`, `audio_file`, `start_ms`, `end_ms`, plus extras
+  (`kind`, `character`, `text`).
 
 ### Phase 3 — Video (Member 2)
-- **PIL placeholder renderer** ships out-of-the-box: vertical mood gradient + character silhouettes + vignette + scene-heading title card. Zero API calls, deterministic per scene.
-- **DALL-E 3** path activated by `IMAGE_BACKEND=openai` in `.env`.
-- **MoviePy** compositor supports both v1.x (`moviepy.editor`) and v2.x (top-level imports) — the compositor auto-detects.
-- Falls back to direct `ffmpeg` subprocess if MoviePy fails, then to a slideshow PNG sidecar if both are missing — the pipeline always produces *something*.
-- Per-scene Ken-Burns zoom, optional caption burn-in, BGM ducking under dialogue.
+A three-tier visual pipeline, each with a graceful local fallback so the
+final MP4 always renders even when nothing is reachable:
+
+| Stage | Remote (Kaggle GPU) | Local fallback |
+|---|---|---|
+| Speaker portrait per dialogue line | **SDXL-Turbo** at 1 step (~3 s on T4) | Local SDXL on CPU (~30 s) → DALL-E 3 → PIL stylised stills |
+| Per-line ambient motion | **Stable Video Diffusion XT** with `enable_model_cpu_offload` + `decode_chunk_size=2` (~2.5 min/clip on T4) | FFmpeg `zoompan` Ken Burns clip on the still |
+| Mouth lip-sync to dialogue audio | **Wav2Lip** (Rudrabha + justinjohn0306 mirror) | FFmpeg passthrough — still + audio, no mouth motion but a valid clip |
+
+- **Compositor** ([`phase3_video/compositor.py`](phase3_video/compositor.py))
+  stitches per-line clips into per-scene MP4s with BGM mixed at -12 dB,
+  burns subtitles via FFmpeg `drawtext` (replacing MoviePy `TextClip` which
+  silently failed without ImageMagick), and concatenates scenes with
+  `xfade` 0.5 s crossfade transitions. Falls back to plain `concat`
+  demuxer + finally a 1-byte placeholder if everything fails.
+- **Remote endpoint contract** ([`phase3_video/_http.py`](phase3_video/_http.py))
+  is one base URL exposing `/sdxl`, `/svd`, `/lipsync`, `/health`, `/unload`.
+  All routes ship the `ngrok-skip-browser-warning` header so free-tier
+  ngrok doesn't return its HTML interstitial.
+- **Auto-cleanup:** every `run_phase3` call POSTs `/unload` first to free
+  GPU caches accumulated by the previous run — no kernel restart needed
+  on the Kaggle side.
+- **Phase 5 cooperation:** an `apply_filter` edit invalidates the affected
+  scene's per-line clip cache so the filter actually shows up in the
+  recomposite, then `run_phase3` re-renders from the (now filtered) inputs.
+- **GPU planning:** when Kaggle is in `T4 x2` mode, SVD takes `cuda:0`
+  (with cpu_offload for VRAM safety alongside the Wav2Lip subprocess) and
+  SDXL takes `cuda:1` permanently. Auto-detected; falls back to
+  lock-and-swap on a single GPU.
 
 ### Phase 4 — Web Interface (Member 3)
 - `FastAPI` with REST + a per-project **WebSocket** (`/api/projects/{id}/ws`) for streaming progress.
@@ -258,18 +336,19 @@ This is the contract. Every phase boundary tests round-trip through this schema.
 ## Testing
 
 ```bash
-pytest                    # full suite — 29 tests, all offline
+pytest                    # full suite — 46 tests, all offline
 pytest tests/test_phase5_edit.py -v   # 15 tests, includes 11 distinct edit-query types
 ```
 
-The test suite **deliberately deletes `OPENAI_API_KEY` from the environment**
-in `tests/conftest.py` so the offline / fallback paths are what gets graded.
+The test suite **deliberately deletes `OPENAI_API_KEY` and `KAGGLE_ENDPOINT`
+from the environment** in `tests/conftest.py` so the offline / fallback paths
+are what gets graded.
 
 | Phase | Tests | What's covered |
 | --- | --- | --- |
-| 1 | 3 | Story shape · contiguous scene numbers · speaker-in-roster invariant |
-| 2 | 5 | TTS voice mapping · BGM file generation · manifest segments per scene · duration realignment |
-| 3 | 3 | PNG generation · darken filter changes pixels · `final_output.mp4` always exists |
+| 1 | 11 | Story shape · contiguous scene numbers · speaker-in-roster invariant · each of the 6 named tools in isolation · serializer writes 6 handoff JSONs with the right shape |
+| 2 | 9 | TTS voice mapping · BGM file generation · manifest segments per scene · duration realignment · prosody table distinct rates · synthesize accepts rate+pitch kwargs · `timing_manifest.json` written to disk · handoff emotions consumed |
+| 3 | 8 | Scene + speaker PNG generation · darken filter changes pixels · Ken Burns clip · SVD passthrough · Wav2Lip passthrough · per-line clips written · `final_output.mp4` always exists |
 | 4 | 3 | `/api/health` · empty-project list · 404 for unknown project |
 | 5 | 15 | 11 query-type classifications · scope+param extraction · snapshot+revert+history |
 
@@ -277,19 +356,42 @@ in `tests/conftest.py` so the offline / fallback paths are what gets graded.
 
 ## Sample run
 
-A real run produced this layout (commit-tracked under `outputs/projects/`):
+A real run produces this layout (per project under `outputs/projects/`):
 
 ```
 20260503-162725-35e62336/
 ├── current/
-│   ├── state.json
-│   ├── audio/   scene01_line01.mp3 · scene01_bgm.wav · …
-│   ├── images/  scene01.png · scene02.png · scene03.png
-│   └── final_output.mp4
-├── v1/  (Initial generation)
-├── v2/  (Edit: Make scene 2 darker)
-├── v3/  (Edit: Apply a sepia filter to scene 1)
-├── v4/  (Reverted to v1)
+│   ├── state.json                    # umbrella ProjectState (Phase 4 reads this)
+│   │
+│   ├── story.json                    # Phase 1 handoffs ─┐
+│   ├── characters.json               #                    │ also embedded in
+│   ├── script.json                   #                    │ state.json — these
+│   ├── phase2_audio_handoff.json     #                    │ are the named
+│   ├── phase3_video_handoff.json     #                    │ artifacts the
+│   ├── summary.json                  #                   ─┘ spec lists
+│   │
+│   ├── timing_manifest.json          # Phase 2 standalone artifact
+│   │
+│   ├── audio/
+│   │   ├── scene01_line01.mp3        # edge-tts MP3 per dialogue line
+│   │   ├── scene01_line01.wav16k.wav # 16 kHz mono WAV cached for Wav2Lip
+│   │   └── scene01_bgm.wav           # procedural BGM per scene
+│   │
+│   ├── images/
+│   │   ├── scene01.png               # establishing shot (Phase 5 filter target)
+│   │   └── scene01_line01_<slug>.png # per-line speaker portrait
+│   │
+│   ├── clips/
+│   │   ├── scene01_line01_motion.mp4 # SVD ambient-motion (or KB fallback)
+│   │   ├── scene01_line01.mp4        # Wav2Lip lip-synced (or passthrough)
+│   │   └── scene01.mp4               # per-scene composite with BGM + subs
+│   │
+│   └── final_output.mp4              # full story, scenes joined with xfade
+│
+├── v1/   (Initial generation)
+├── v2/   (Edit: Make scene 2 darker)
+├── v3/   (Edit: Apply a sepia filter to scene 1)
+├── v4/   (Reverted to v1)
 └── history.json
 ```
 
@@ -299,17 +401,20 @@ A real run produced this layout (commit-tracked under `outputs/projects/`):
 
 | Layer | Tool | Why |
 | --- | --- | --- |
-| Agent runtime | **LangGraph** | StateGraph + checkpointer for both Phase 1 and Phase 5 |
+| Agent runtime | **LangGraph** | StateGraph + checkpointer for both Phase 1 (3 agents) and Phase 5 (intent classifier) |
 | LLM | OpenAI `gpt-4o-mini` (optional) | Phase 1 stories + Phase 5 intent classification |
-| Schema | **Pydantic v2** | Validates every phase boundary |
-| TTS | `edge-tts` | Free, no API key, async, decent voice quality |
+| Schema | **Pydantic v2** | Validates every phase boundary, including the 6 Phase-1 handoff files |
+| TTS | `edge-tts` (free) + emotion-driven prosody | Free, no API key, async; runtime fallback voice when Microsoft retires one |
 | BGM | `numpy` + `wave` | Procedural pads — no licensing concerns |
-| Image gen | `Pillow` (default) / DALL-E 3 (optional) | Works offline, works in CI |
-| Video | `MoviePy` 1.x **or** 2.x → `ffmpeg` → slideshow | Three-tier fallback |
+| Image gen | **SDXL-Turbo** (`diffusers`) → DALL-E 3 → PIL stylised stills | Three-tier fallback; SDXL runs locally on CPU OR remotely on Kaggle GPU |
+| Video gen | **Stable Video Diffusion XT** on Kaggle | Image → 2-3 s ambient motion clip per dialogue line |
+| Lip-sync | **Wav2Lip** (Rudrabha) on Kaggle | Mouth motion synced to dialogue audio |
+| Composition | `ffmpeg` (zoompan, drawtext, xfade, amix) | One re-encode pass per stage; replaces MoviePy's TextClip |
+| Remote tunnel | `pyngrok` + Kaggle T4×2 GPU | Free GPU compute exposed via one HTTP base URL with `/sdxl`, `/svd`, `/lipsync`, `/unload`, `/health` |
 | Backend | **FastAPI** + `uvicorn` | Fast, type-safe, native WebSocket |
 | Frontend | Hand-written HTML/CSS/JS | No build step, no Node dependency |
 | State store | Append-only filesystem snapshots | Simple, durable, transparent in `outputs/` |
-| Tests | `pytest` + `pytest-asyncio` | 29 tests, all offline |
+| Tests | `pytest` + `pytest-asyncio` | 46 tests, all offline |
 
 ---
 
