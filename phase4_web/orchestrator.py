@@ -73,7 +73,12 @@ async def generate_full_pipeline(
 
     # ── Phase 1 ────────────────────────────────────────────────────
     await _emit(progress, "──── PHASE 1: Story & Script ────")
-    story, log = run_phase1(prompt=prompt, num_scenes=num_scenes, style=style)
+    story, log = run_phase1(
+        prompt=prompt,
+        num_scenes=num_scenes,
+        style=style,
+        project_dir=project_dir,
+    )
     for entry in log:
         await _emit(progress, entry)
     state.story = story

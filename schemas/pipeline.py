@@ -82,6 +82,63 @@ class Story(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# Phase 1 — internal handoff types between the three agents                    #
+# --------------------------------------------------------------------------- #
+
+
+class SceneOutline(BaseModel):
+    """High-level beat — produced by the Story agent, consumed by the Script agent."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    scene_number: int
+    heading: str
+    mood: str = "neutral"
+    target_duration_s: float = Field(default=8.0, ge=2.0, le=60.0)
+    summary: str = Field(default="", description="One-line description of what happens.")
+
+
+class StoryArc(BaseModel):
+    """Three-act skeleton — output of the Story agent's structural reasoning."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    intro: str = ""
+    rising_action: str = ""
+    climax: str = ""
+    resolution: str = ""
+
+
+class StoryOutline(BaseModel):
+    """Story agent output — title, themes, arc, scene beats. No characters yet."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    title: str
+    logline: str = ""
+    style: str = "cinematic"
+    themes: list[str] = Field(default_factory=list)
+    arc: StoryArc = Field(default_factory=StoryArc)
+    scene_outlines: list[SceneOutline] = Field(default_factory=list)
+
+
+class CharacterRoster(BaseModel):
+    """Character agent output — the cast for this story."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    characters: list[Character] = Field(default_factory=list)
+
+
+class ScriptOutput(BaseModel):
+    """Script agent output — fully fleshed scenes (dialogue, visuals, timing)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    scenes: list[Scene] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
 # Phase 2 — Audio                                                              #
 # --------------------------------------------------------------------------- #
 

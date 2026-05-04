@@ -111,6 +111,98 @@ def stub_story(prompt: str, num_scenes: int = 3) -> dict:
     }
 
 
+def stub_outline(prompt: str, num_scenes: int = 3, style: str = "cinematic") -> dict:
+    """Deterministic StoryOutline used when no OPENAI_API_KEY is set or the LLM fails."""
+    short = (prompt or "an unspecified adventure").strip()[:80]
+    title = f"Echoes of {short.split()[0].title() if short else 'Tomorrow'}"
+    moods = ["hopeful", "tense", "reflective", "joyful", "melancholy"]
+    return {
+        "title": title,
+        "logline": f"A short film inspired by: {short}.",
+        "style": style,
+        "themes": ["discovery", "resolve"],
+        "arc": {
+            "intro": f"Establish the world hinted at by '{short}'.",
+            "rising_action": "The protagonist commits to a course of action.",
+            "climax": "A defining choice or revelation.",
+            "resolution": "Quiet aftermath, with the world subtly changed.",
+        },
+        "scene_outlines": [
+            {
+                "scene_number": i + 1,
+                "heading": f"SCENE {i + 1} — ESTABLISHING SHOT",
+                "mood": moods[i % len(moods)],
+                "target_duration_s": 8.0,
+                "summary": f"Beat {i + 1}: the story advances another step.",
+            }
+            for i in range(num_scenes)
+        ],
+    }
+
+
+def stub_roster(outline: dict | None = None) -> dict:
+    """Deterministic CharacterRoster — a narrator + a protagonist (always ≥2)."""
+    return {
+        "characters": [
+            {
+                "name": "Narrator",
+                "role": "narrator",
+                "voice_style": "warm",
+                "appearance": "Unseen voice — no on-screen presence",
+                "personality": "Reflective, calm, observant",
+            },
+            {
+                "name": "Protagonist",
+                "role": "protagonist",
+                "voice_style": "youthful",
+                "appearance": "A figure in their late twenties, traveler's clothes, weathered face",
+                "personality": "Curious, brave, principled",
+            },
+        ],
+    }
+
+
+def stub_script(outline: dict, roster: dict, prompt: str = "") -> dict:
+    """Deterministic ScriptOutput — full scenes with dialogue + visuals."""
+    style = (outline or {}).get("style") or "cinematic"
+    title = (outline or {}).get("title") or "Untitled"
+    short = (prompt or title).strip()[:80]
+    scene_outlines = (outline or {}).get("scene_outlines") or []
+    num_scenes = max(1, len(scene_outlines))
+    times = ["DAWN", "DAY", "DUSK"]
+    return {
+        "scenes": [
+            {
+                "scene_number": (so.get("scene_number") or i + 1),
+                "heading": so.get("heading") or f"SCENE {i + 1} — ESTABLISHING SHOT",
+                "location": "An open landscape that frames the moment",
+                "time_of_day": times[i % len(times)],
+                "mood": so.get("mood") or "neutral",
+                "duration_seconds": float(so.get("target_duration_s") or 8.0),
+                "characters": ["Narrator", "Protagonist"],
+                "action": so.get("summary") or f"Beat {i + 1}: the story advances another step.",
+                "visual_prompt": (
+                    f"{style} still, {short}, moody lighting, ultra detailed, 16:9, "
+                    f"beat {i + 1} of {num_scenes}"
+                ),
+                "dialogue": [
+                    {
+                        "character": "Narrator",
+                        "line": f"It was the {['first', 'middle', 'final'][i % 3]} chapter of {title}.",
+                        "direction": "(softly)",
+                    },
+                    {
+                        "character": "Protagonist",
+                        "line": "I have to keep going. There's no other way.",
+                        "direction": "(determined)",
+                    },
+                ],
+            }
+            for i, so in enumerate(scene_outlines or [{}] * num_scenes)
+        ],
+    }
+
+
 def stub_intent(query: str) -> dict:
     """Tiny rule-based intent classifier used when no LLM key is set."""
     q = (query or "").lower()
