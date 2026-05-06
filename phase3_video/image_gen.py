@@ -360,15 +360,34 @@ def generate_speaker_image(
     )
     appearance = ((char.appearance if char else "") or "calm expression").strip()
     # CLIP truncates at 77 tokens. Trim appearance + drop redundant adjectives
-    # so the suffix ("centred face, looking at camera") survives intact —
-    # that part is what makes the output usable for Wav2Lip face detection.
+    # so the face-detectability suffix survives intact.
     appearance = appearance[:80]
-    location = (scene.location or "evocative setting")[:40]
+
+    # Wav2Lip uses S3FD which is trained on real, unobscured human faces.
+    # Strip / replace common appearance terms that produce face-detector-hostile
+    # outputs (helmets, masks, hoods, veils). For an astronaut, we still want
+    # them recognisable as an astronaut — just visor up, face exposed.
+    OBSCURING = {
+        "helmet": "helmet visor open, face fully visible",
+        "mask":   "mask lowered, face fully visible",
+        "hood":   "hood pulled back, face fully visible",
+        "veil":   "veil lifted, face fully visible",
+        "balaclava": "face fully visible",
+    }
+    lower = appearance.lower()
+    for term, replacement in OBSCURING.items():
+        if term in lower:
+            appearance = appearance + f", {replacement}"
+            break
+
+    location = (scene.location or "evocative setting")[:30]
     prompt = (
-        f"close-up portrait, {character_name}, {appearance}, "
-        f"{location}, {scene.mood} mood, "
-        f"{(scene.time_of_day or 'day').lower()} light, "
-        f"{story.style} style, centred face, looking at camera, sharp focus"
+        # The leading "headshot photo of a human face" anchors S3FD detection.
+        f"headshot photo of a human face, {character_name}, "
+        f"{appearance}, "
+        f"front-facing, looking directly at camera, eye contact, "
+        f"clear unobscured face, sharp focus on eyes nose mouth, "
+        f"{location}, {scene.mood} mood"
     )
     seed = _seed_for_character(character_name)
 
