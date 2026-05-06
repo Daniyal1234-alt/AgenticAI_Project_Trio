@@ -209,15 +209,15 @@ def character_agent_node(state: Phase1State) -> Phase1State:
             data = chat_json(rendered, temperature=0.7)
             if not isinstance(data, dict) or "characters" not in data:
                 log.append("[Phase1] character_agent: LLM returned non-conforming JSON — using stub")
-                data = stub_roster(outline)
+                data = stub_roster(outline, prompt=state.get("prompt", ""))
             else:
                 log.append(f"[Phase1] character_agent: roster of {len(data.get('characters', []))} characters")
         except Exception as exc:
             log.append(f"[Phase1] character_agent error: {exc!r} — using stub")
-            data = stub_roster(outline)
+            data = stub_roster(outline, prompt=state.get("prompt", ""))
     else:
         log.append("[Phase1] character_agent: no OPENAI_API_KEY — using stub")
-        data = stub_roster(outline)
+        data = stub_roster(outline, prompt=state.get("prompt", ""))
 
     # Run tool
     try:
