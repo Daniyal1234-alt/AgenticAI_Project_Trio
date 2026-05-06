@@ -232,13 +232,39 @@ async def run_phase3(
                     await _emit(progress, f"[Phase3]   line {idx}: missing audio — skipping")
                     continue
 
-                clip = await asyncio.to_thread(
-                    _render_line,
-                    scene, story, idx, line.character, audio_path,
-                    images_dir, clips_dir,
-                    regenerate=regenerate,
-                )
-                line_clips.append(clip)
+                # Split _render_line into its three sub-steps so the WebSocket
+                # gets a progress message every ~30-180 s. Without this, the
+                # browser drops the WS after ~60 s of silence — and a single
+                # failed Wav2Lip face-detect can sit silent for 3+ min.
+                speaker_img = images_dir / f"scene{sn:02d}_line{idx:02d}_{_slug(line.character)}.png"
+                motion_clip = clips_dir / f"scene{sn:02d}_line{idx:02d}_motion.mp4"
+                lip_clip    = clips_dir / f"scene{sn:02d}_line{idx:02d}.mp4"
+
+                if regenerate or not speaker_img.exists():
+                    await _emit(progress, f"[Phase3]   line {idx}: portrait ({line.character})")
+                    await asyncio.to_thread(
+                        generate_speaker_image, scene, line.character, story, str(speaker_img)
+                    )
+
+                duration_s = await asyncio.to_thread(_audio_duration, audio_path) or 2.0
+
+                if regenerate or not motion_clip.exists() or motion_clip.stat().st_size < 1000:
+                    await _emit(progress, f"[Phase3]   line {idx}: motion clip ({duration_s:.1f}s)")
+                    await asyncio.to_thread(
+                        svd.generate_clip, str(speaker_img), duration_s, str(motion_clip)
+                    )
+
+                if regenerate or not lip_clip.exists() or lip_clip.stat().st_size < 1000:
+                    face_input = (
+                        motion_clip if motion_clip.exists() and motion_clip.stat().st_size > 1000
+                        else speaker_img
+                    )
+                    await _emit(progress, f"[Phase3]   line {idx}: lip-sync")
+                    await asyncio.to_thread(
+                        lipsync.lipsync_line, str(face_input), audio_path, str(lip_clip)
+                    )
+
+                line_clips.append(str(lip_clip))
                 line_texts.append(line.line)
 
             await _emit(progress, f"[Phase3] scene {sn}: composing")

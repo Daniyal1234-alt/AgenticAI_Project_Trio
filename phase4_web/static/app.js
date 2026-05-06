@@ -170,6 +170,10 @@ function openWebSocket(projectId, onDone) {
 
   ws.onmessage = (ev) => {
     const msg = ev.data;
+    // Heartbeat ping (single colon) every 15 s — the server sends it during
+    // long-running Phase 3 steps so browsers / proxies don't drop the WS on
+    // idle. Drop it on the floor; don't render it in the log.
+    if (msg === ':') return;
     if (msg === '__DONE__') {
       ws.close();
       setBadge(elPhaseBadge, 'ok', 'done');

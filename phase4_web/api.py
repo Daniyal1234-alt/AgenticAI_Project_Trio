@@ -227,11 +227,27 @@ def get_project(project_id: str) -> dict:
 
 @app.websocket("/api/projects/{project_id}/ws")
 async def project_ws(ws: WebSocket, project_id: str) -> None:
+    """
+    Stream pipeline progress to the browser.
+
+    Single-step Phase 3 stages (SDXL → SVD → Wav2Lip per dialogue line) can
+    each take 30-300 s on Kaggle. Without a periodic heartbeat the browser
+    drops the WebSocket on idle, and a single Wav2Lip face-detect failure
+    that runs ~3 min silent is enough to kill the stream. We send a `:` ping
+    every 15 s alongside whatever the pipeline emits — `app.js` can ignore
+    pings (single-character messages) when rendering the log.
+    """
     await ws.accept()
     q = bus.subscribe(project_id)
+    HEARTBEAT_SECONDS = 15.0
     try:
         while True:
-            msg = await q.get()
+            try:
+                msg = await asyncio.wait_for(q.get(), timeout=HEARTBEAT_SECONDS)
+            except asyncio.TimeoutError:
+                # No pipeline output for HEARTBEAT_SECONDS — keep the WS alive.
+                await ws.send_text(":")
+                continue
             await ws.send_text(msg)
             if msg == "__DONE__":
                 break
