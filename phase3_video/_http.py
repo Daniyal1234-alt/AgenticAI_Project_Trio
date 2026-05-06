@@ -47,6 +47,10 @@ def post_endpoint(path: str, payload: dict, *, timeout: float = 180.0) -> Option
 
     Failures are printed to stderr (with the server's `detail` field when
     present) so silent fall-through to passthrough is visible in the log.
+
+    Retries once on `RemoteProtocolError` — ngrok free tier occasionally cuts
+    multi-megabyte response bodies mid-transfer. The response is fully
+    rendered on the server side, just dropped on the wire.
     """
     base = _endpoint()
     if not base:
@@ -56,29 +60,42 @@ def post_endpoint(path: str, payload: dict, *, timeout: float = 180.0) -> Option
     except ImportError:
         return None
     url = f"{base}/{path.lstrip('/')}"
-    try:
-        with httpx.Client(timeout=timeout, headers=_NGROK_HEADERS) as client:
-            r = client.post(url, json=payload)
-            if r.status_code >= 400:
-                # Try to surface FastAPI's `detail` field — useful when Wav2Lip
-                # raises on face-detection or audio decoding errors.
-                detail: Any = r.text
-                try:
-                    detail = r.json().get("detail", detail)
-                except Exception:
-                    pass
-                detail_str = str(detail)
-                # Long tracebacks are useful — print up to 3000 chars.
-                if len(detail_str) > 3000:
-                    detail_str = detail_str[:3000] + "...[truncated]"
-                print(f"[Phase3] {path} → HTTP {r.status_code}: {detail_str}",
+
+    last_exc: Optional[Exception] = None
+    for attempt in range(2):
+        try:
+            with httpx.Client(timeout=timeout, headers=_NGROK_HEADERS) as client:
+                r = client.post(url, json=payload)
+                if r.status_code >= 400:
+                    # Try to surface FastAPI's `detail` field — useful when Wav2Lip
+                    # raises on face-detection or audio decoding errors.
+                    detail: Any = r.text
+                    try:
+                        detail = r.json().get("detail", detail)
+                    except Exception:
+                        pass
+                    detail_str = str(detail)
+                    # Long tracebacks are useful — print up to 3000 chars.
+                    if len(detail_str) > 3000:
+                        detail_str = detail_str[:3000] + "...[truncated]"
+                    print(f"[Phase3] {path} → HTTP {r.status_code}: {detail_str}",
+                          file=__import__("sys").stderr, flush=True)
+                    return None
+                return r.json()
+        except httpx.RemoteProtocolError as exc:
+            last_exc = exc
+            if attempt == 0:
+                print(f"[Phase3] {path} → mid-stream disconnect, retrying once: {exc!r}",
                       file=__import__("sys").stderr, flush=True)
-                return None
-            return r.json()
-    except Exception as exc:
-        print(f"[Phase3] {path} → request failed: {exc!r}",
-              file=__import__("sys").stderr, flush=True)
-        return None
+                continue
+            print(f"[Phase3] {path} → request failed after retry: {exc!r}",
+                  file=__import__("sys").stderr, flush=True)
+            return None
+        except Exception as exc:
+            print(f"[Phase3] {path} → request failed: {exc!r}",
+                  file=__import__("sys").stderr, flush=True)
+            return None
+    return None
 
 
 def endpoint_health(timeout: float = 5.0) -> Optional[dict[str, Any]]:
