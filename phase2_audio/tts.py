@@ -34,8 +34,6 @@ _STYLE_VOICE_MAP = {
     "whispered": "en-US-JennyNeural",
     "cheerful": "en-US-JennyNeural",
     "youthful": "en-US-AnaNeural",
-    # Was en-US-DavisNeural — retired by Microsoft. en-US-GuyNeural is the
-    # closest live male voice with a similar timbre.
     "determined": "en-US-GuyNeural",
     "neutral": "en-US-JennyNeural",
 }
