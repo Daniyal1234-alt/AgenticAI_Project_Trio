@@ -78,6 +78,16 @@ def ken_burns(
     motion = (motion or "static").lower()
     expr = _MOTIONS.get(motion)
 
+    # We mux a silent audio track (lavfi anullsrc, mono 48 kHz) into every
+    # ken-burns output so the clip can be concatenated alongside dialogue
+    # clips that have audio — without uniform stream layout, the concat
+    # filter / demuxer drops the inconsistent input.
+    silent_audio = [
+        "-f", "lavfi", "-t", f"{duration_s:.3f}",
+        "-i", "anullsrc=channel_layout=mono:sample_rate=48000",
+    ]
+    audio_codec = ["-c:a", "aac", "-shortest"]
+
     if expr is None:
         # Static loop — no zoompan, just resize-and-pad to 1280x720.
         vf = (
@@ -85,11 +95,13 @@ def ken_burns(
             f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,setsar=1"
         )
         cmd = [
-            ffmpeg, "-y", "-loop", "1", "-t", f"{duration_s:.3f}",
-            "-i", image_path,
+            ffmpeg, "-y",
+            "-loop", "1", "-t", f"{duration_s:.3f}", "-i", image_path,
+            *silent_audio,
             "-vf", vf,
             "-r", str(FPS),
             "-c:v", "libx264", "-tune", "stillimage", "-pix_fmt", "yuv420p",
+            *audio_codec,
             out_path,
         ]
     else:
@@ -101,10 +113,12 @@ def ken_burns(
         )
         vf = prefilter + expr.format(d=n_frames, W=WIDTH, H=HEIGHT, fps=FPS)
         cmd = [
-            ffmpeg, "-y", "-loop", "1", "-t", f"{duration_s:.3f}",
-            "-i", image_path,
+            ffmpeg, "-y",
+            "-loop", "1", "-t", f"{duration_s:.3f}", "-i", image_path,
+            *silent_audio,
             "-vf", vf,
             "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            *audio_codec,
             out_path,
         ]
 

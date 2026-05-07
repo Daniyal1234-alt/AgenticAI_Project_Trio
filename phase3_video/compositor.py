@@ -102,7 +102,17 @@ def compose_scene(
 
 
 def _concat_clips(ffmpeg: str, clips: list[str], out_path: str) -> bool:
-    """Concatenate clips via the ffmpeg concat demuxer (assumes uniform codec)."""
+    """
+    Concatenate per-line clips into a per-scene MP4.
+
+    Uses the FFmpeg `concat` *filter* (NOT the demuxer). Different line
+    sources have different audio sample rates: Wav2Lip outputs 16 kHz,
+    passthrough outputs 24 kHz, and the establishing-intro clip (silent
+    via `anullsrc`) is 48 kHz. The concat demuxer doesn't normalise this
+    and produces output where the audio plays at 3× speed / pitch when
+    the player decodes 16 kHz samples at the 48 kHz timebase. The
+    concat filter explicitly remaps every input via `aresample` first.
+    """
     if len(clips) == 1:
         try:
             Path(out_path).write_bytes(Path(clips[0]).read_bytes())
@@ -110,38 +120,42 @@ def _concat_clips(ffmpeg: str, clips: list[str], out_path: str) -> bool:
         except Exception:
             return False
 
-    list_path = str(Path(out_path).with_suffix(".txt"))
-    try:
-        with open(list_path, "w", encoding="utf-8") as f:
-            for c in clips:
-                # ffmpeg's concat demuxer needs forward slashes and quoted paths.
-                p = os.path.abspath(c).replace("\\", "/").replace("'", r"'\''")
-                f.write(f"file '{p}'\n")
-    except Exception:
-        return False
+    n = len(clips)
+    inputs: list[str] = []
+    for c in clips:
+        inputs.extend(["-i", c])
+
+    filter_parts: list[str] = []
+    concat_chain: list[str] = []
+    for i in range(n):
+        filter_parts.append(
+            f"[{i}:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
+            f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={FPS}[v{i}]"
+        )
+        filter_parts.append(
+            f"[{i}:a]aresample=48000,aformat=channel_layouts=mono[a{i}]"
+        )
+        concat_chain.append(f"[v{i}][a{i}]")
+
+    filter_parts.append(
+        "".join(concat_chain) + f"concat=n={n}:v=1:a=1[v][a]"
+    )
+    filter_complex = ";".join(filter_parts)
 
     cmd = [
-        ffmpeg, "-y", "-f", "concat", "-safe", "0",
-        "-i", list_path,
-        # Re-encode rather than `-c copy` — line clips may differ slightly
-        # in fps/timebase from passthrough vs Wav2Lip output.
-        "-vf", f"scale={WIDTH}:{HEIGHT},setsar=1",
-        "-r", str(FPS),
+        ffmpeg, "-y", *inputs,
+        "-filter_complex", filter_complex,
+        "-map", "[v]", "-map", "[a]",
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
+        "-c:a", "aac", "-ar", "48000",
         out_path,
     ]
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, timeout=180)
+                       stderr=subprocess.DEVNULL, timeout=300)
         return Path(out_path).exists() and Path(out_path).stat().st_size > 1000
     except Exception:
         return False
-    finally:
-        try:
-            os.unlink(list_path)
-        except Exception:
-            pass
 
 
 def _mix_bgm(ffmpeg: str, dialogue_path: str, bgm_path: str, out_path: str, *, gain: float = 0.25) -> bool:
@@ -317,9 +331,18 @@ def concat_with_transitions(
     transition_duration: float = 0.5,
 ) -> str:
     """
-    Concatenate per-scene MP4s into a final video with `xfade` crossfade
-    transitions between them. Falls back to a hard-cut concat (or a copy
-    of the first clip) if the xfade chain fails.
+    Concatenate per-scene MP4s into a final video.
+
+    Default: uses the FFmpeg concat demuxer (hard cuts between scenes). This
+    is the reliable path — every clip plays start-to-end, audio and video
+    stay in lockstep, and the output's duration is exactly the sum of inputs.
+
+    Optional: set `PHASE3_XFADE=1` in the env to enable the crossfade chain.
+    Crossfades look nicer for short videos (2-3 scenes) but the FFmpeg xfade
+    filter accumulates timebase drift across long chains — for ≥4 scenes the
+    output can show frozen sections, audio desync, or video that "skips"
+    from one scene to a far-later scene because of bogus PTS metadata. So
+    we don't use it by default any more.
     """
     out_path = str(out_path)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
@@ -335,10 +358,16 @@ def concat_with_transitions(
         Path(out_path).write_bytes(Path(clips[0]).read_bytes())
         return out_path
 
-    # Try crossfade first; if it errors, fall back to a hard-cut concat.
-    if _concat_xfade(ffmpeg, clips, out_path, transition_duration=transition_duration):
+    use_xfade = os.environ.get("PHASE3_XFADE", "").strip() in ("1", "true", "yes")
+    if use_xfade and _concat_xfade(ffmpeg, clips, out_path, transition_duration=transition_duration):
         return out_path
+
+    # Default + fallback: hard-cut concat (concat demuxer, re-encoded uniform).
     if _concat_hardcut(ffmpeg, clips, out_path):
+        return out_path
+
+    # Last resort: xfade if we hadn't tried it, then a 1-byte placeholder.
+    if not use_xfade and _concat_xfade(ffmpeg, clips, out_path, transition_duration=transition_duration):
         return out_path
 
     Path(out_path).write_bytes(Path(clips[0]).read_bytes())
@@ -394,23 +423,51 @@ def _concat_xfade(ffmpeg: str, clips: list[str], out_path: str, *, transition_du
         return False
 
 
+_AUDIO_SAMPLE_RATE = 48000  # uniform rate for the final concat
+
+
 def _concat_hardcut(ffmpeg: str, clips: list[str], out_path: str) -> bool:
-    """Plain concat-demuxer fallback."""
-    list_path = str(Path(out_path).with_suffix(".concat.txt"))
-    try:
-        with open(list_path, "w", encoding="utf-8") as f:
-            for c in clips:
-                p = os.path.abspath(c).replace("\\", "/").replace("'", r"'\''")
-                f.write(f"file '{p}'\n")
-    except Exception:
-        return False
+    """
+    Hard-cut concat using the FFmpeg `concat` *filter* (NOT the concat
+    demuxer). The filter explicitly remaps every input stream to a
+    uniform format before joining — necessary because per-scene clips
+    can have different audio sample rates (Wav2Lip output is 16 kHz
+    while passthrough output is 24 kHz, and the BGM mixer auto-selects
+    whichever input was loaded first). The concat *demuxer* doesn't
+    normalize this and produces output where the player jumps forward
+    to a later timestamp at every sample-rate boundary.
+    """
+    n = len(clips)
+    inputs: list[str] = []
+    for c in clips:
+        inputs.extend(["-i", c])
+
+    # Normalise every input: video → 24 fps, 1280x720, sar=1; audio → 48 kHz mono.
+    # Then chain through the concat filter.
+    filter_parts: list[str] = []
+    concat_chain: list[str] = []
+    for i in range(n):
+        filter_parts.append(
+            f"[{i}:v]scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
+            f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={FPS}[v{i}]"
+        )
+        filter_parts.append(
+            f"[{i}:a]aresample={_AUDIO_SAMPLE_RATE},aformat=channel_layouts=mono[a{i}]"
+        )
+        concat_chain.append(f"[v{i}][a{i}]")
+
+    filter_parts.append(
+        "".join(concat_chain) + f"concat=n={n}:v=1:a=1[v][a]"
+    )
+    filter_complex = ";".join(filter_parts)
+
     cmd = [
-        ffmpeg, "-y", "-f", "concat", "-safe", "0",
-        "-i", list_path,
-        "-vf", f"scale={WIDTH}:{HEIGHT},setsar=1",
-        "-r", str(FPS),
+        ffmpeg, "-y", *inputs,
+        "-filter_complex", filter_complex,
+        "-map", "[v]", "-map", "[a]",
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
+        "-c:a", "aac", "-ar", str(_AUDIO_SAMPLE_RATE),
+        "-movflags", "+faststart",
         out_path,
     ]
     try:
@@ -419,11 +476,6 @@ def _concat_hardcut(ffmpeg: str, clips: list[str], out_path: str) -> bool:
         return Path(out_path).exists() and Path(out_path).stat().st_size > 1000
     except Exception:
         return False
-    finally:
-        try:
-            os.unlink(list_path)
-        except Exception:
-            pass
 
 
 __all__ = ["compose_scene", "concat_with_transitions"]

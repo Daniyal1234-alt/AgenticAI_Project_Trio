@@ -102,11 +102,13 @@ Return ONLY a single JSON object — no prose, no markdown — matching this sch
       "time_of_day": "DAWN | DAY | DUSK | NIGHT",
       "mood": "single mood word matching the outline",
       "duration_seconds": 8.0,
-      "characters": ["Name1"],
+      "characters": ["Name1", "Name2"],
       "action": "What physically happens in the scene",
       "visual_prompt": "Detailed image-generator prompt: subject, setting, lighting, lens, art style",
       "dialogue": [
-        {{"character": "Name1", "line": "What they say", "direction": "(softly)"}}
+        {{"character": "Name1", "line": "Opening beat — sets up what's about to happen.", "direction": "(softly)"}},
+        {{"character": "Name2", "line": "Reactive beat — pushes back, agrees, or escalates.", "direction": "(determined)"}},
+        {{"character": "Name1", "line": "Closing beat — lands the moment for the cut.", "direction": "(quiet)"}}
       ]
     }}
   ]
@@ -115,7 +117,12 @@ Return ONLY a single JSON object — no prose, no markdown — matching this sch
 Hard rules:
 - EXACTLY {num_scenes} scenes, in scene_number order 1..N.
 - Every dialogue.character MUST be a name from the CAST above (no new characters).
-- Every scene needs at least 1 dialogue line and a vivid visual_prompt.
+- AIM FOR 2-3 dialogue lines per scene — at least 2 unless the scene is purely
+  visual/atmospheric. Use back-and-forth between characters, not monologue.
+- Each line should be short (1 sentence, max ~15 words) — short-film pacing,
+  not a stage play.
+- Vary which character speaks first across scenes; don't make one character
+  lead every scene.
 - duration_seconds must be between 2 and 60. Aim for {scene_seconds:.0f}s per scene.
-- Keep dialogue tight — short film pacing, not a stage play.
+- Every scene needs a vivid visual_prompt for the establishing shot.
 """

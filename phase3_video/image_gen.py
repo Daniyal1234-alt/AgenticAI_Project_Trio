@@ -324,15 +324,57 @@ def _backend_chain(prompt: str, out_path: str, *, seed: int) -> Optional[str]:
 
 
 def generate_scene_image(scene: Scene, story: Story, out_path: str) -> str:
-    """Generate an establishing-shot image for a scene."""
+    """
+    Generate an establishing-shot image for a scene.
+
+    We deliberately don't blindly trust `scene.visual_prompt` from Phase 1 —
+    the LLM (and the stub) often write generic prompts ("cinematic still,
+    <user-prompt>, beat N of 3") that produce SDXL hallucinations unrelated
+    to what's actually happening in the scene. Instead we always compose a
+    fresh prompt from concrete scene metadata (location, action, characters,
+    mood, time-of-day) and append the Phase 1 visual_prompt as supplementary
+    detail when present.
+    """
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
 
-    prompt = scene.visual_prompt or (
-        f"{story.style} animated film still, {scene.location or 'a dramatic setting'}, "
-        f"{(scene.time_of_day or 'day').lower()} lighting, mood: {scene.mood}, "
-        f"action: {(scene.action or 'a quiet moment')[:120]}, "
-        "ultra detailed, 16:9, dramatic composition"
-    )
+    # Style prefix — same lookup as generate_speaker_image, but for wide shots.
+    style_key = (story.style or "cinematic").lower()
+    STYLE_PREFIX = {
+        "cinematic":   "cinematic film still, wide establishing shot",
+        "noir":        "high-contrast black-and-white noir film still, wide shot",
+        "anime":       "anime-style wide establishing shot",
+        "cartoon":     "cartoon animation cel, wide establishing shot",
+        "realistic":   "photorealistic wide establishing shot",
+        "documentary": "documentary photograph, wide establishing shot",
+    }
+    style_prefix = STYLE_PREFIX.get(style_key, f"{style_key} wide establishing shot")
+
+    # Concrete scene anchors — these dominate the prompt so the image
+    # actually reflects this scene's content rather than a generic mood piece.
+    location  = (scene.location or "a dramatic setting")[:80]
+    action    = (scene.action or "")[:120]
+    chars     = ", ".join((scene.characters or [])[:4])[:80]
+    time_of_day = (scene.time_of_day or "day").lower()
+    mood      = scene.mood or "neutral"
+
+    parts = [style_prefix, location]
+    if chars:
+        parts.append(f"with {chars}")
+    if action:
+        parts.append(action)
+    parts.extend([
+        f"{time_of_day} lighting",
+        f"{mood} mood",
+        "ultra detailed, 16:9, dramatic composition",
+    ])
+    # Append the LLM's visual_prompt only as supplementary atmosphere — it
+    # can sharpen the look but doesn't get to override the scene anchors.
+    if scene.visual_prompt and len(scene.visual_prompt) > 30:
+        # Strip the LLM's own style prefix to avoid duplication.
+        extra = scene.visual_prompt[:120]
+        parts.append(extra)
+
+    prompt = ", ".join(parts)
     seed = int(_seeded_rng(scene, story.title).randrange(2**31))
 
     rendered = _backend_chain(prompt, out_path, seed=seed)
@@ -381,9 +423,26 @@ def generate_speaker_image(
             break
 
     location = (scene.location or "evocative setting")[:30]
+
+    # Map the user-chosen story.style to a SDXL-recognised style phrase.
+    # The leading word still anchors S3FD detection (it needs to see a "face"-
+    # shaped output) but we can pivot from photo to drawn-style for non-realistic
+    # styles. WARNING: heavy stylization (anime, cartoon, noir-illustration)
+    # makes S3FD's job harder — Wav2Lip then falls through to passthrough on
+    # those lines (still + audio, no mouth motion).
+    style_key = (story.style or "cinematic").lower()
+    STYLE_PROMPTS = {
+        "cinematic":  "cinematic close-up portrait of a human face",
+        "noir":       "high-contrast black-and-white noir close-up of a human face",
+        "anime":      "anime-style close-up portrait of a character face, expressive eyes",
+        "cartoon":    "cartoon close-up portrait of a stylised human-like face, animation cel",
+        "realistic":  "photorealistic headshot of a human face",
+        "documentary":"documentary photograph headshot of a human face",
+    }
+    style_prefix = STYLE_PROMPTS.get(style_key, f"{style_key} close-up portrait of a human face")
+
     prompt = (
-        # The leading "headshot photo of a human face" anchors S3FD detection.
-        f"headshot photo of a human face, {character_name}, "
+        f"{style_prefix}, {character_name}, "
         f"{appearance}, "
         f"front-facing, looking directly at camera, eye contact, "
         f"clear unobscured face, sharp focus on eyes nose mouth, "

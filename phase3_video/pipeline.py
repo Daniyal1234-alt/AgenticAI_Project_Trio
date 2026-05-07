@@ -220,6 +220,23 @@ async def run_phase3(
             line_clips: list[str] = []
             line_texts: list[str] = []
 
+            # Establishing-shot Ken Burns clip on the wider scene image, played
+            # before the dialogue lines. Without this, every visible frame is a
+            # tight talking-head portrait — viewers never see the location.
+            # Cycles motion direction by scene index for variety.
+            intro_clip = clips_dir / f"scene{sn:02d}_intro.mp4"
+            intro_motion_cycle = ("zoom_in", "pan_right", "zoom_out", "pan_left")
+            intro_motion = intro_motion_cycle[(sn - 1) % len(intro_motion_cycle)]
+            if regenerate or not intro_clip.exists() or intro_clip.stat().st_size < 1000:
+                await _emit(progress, f"[Phase3]   intro: {intro_motion} on scene image")
+                await asyncio.to_thread(
+                    animation.ken_burns,
+                    str(scene_img), 1.5, str(intro_clip),
+                    motion=intro_motion,
+                )
+            line_clips.append(str(intro_clip))
+            line_texts.append("")  # empty subtitle — drawtext skips empty lines
+
             for idx, line in enumerate(scene.dialogue, start=1):
                 # Pair the dialogue line with its matching audio segment.
                 # The manifest is built in scene order, so segs[i] should align.
